@@ -1,0 +1,15 @@
+version: '3.4'
+
+services:
+  eshop.modernized.mvc:
+    image: eshop/modernizedmvc
+    build:
+      context: .\src\eShopModernizedMVC
+      dockerfile: Dockerfile
+    environment:
+      - ConnectionString=Server=localhost;Database=Microsoft.eShopOnContainers.Services.CatalogDb;User Id=sa;Password=Pass@word
+      - UseMockData=True
+      - UseCustomizationData=False
+      - UseAzureStorage=False
+    ports:
+      - "5115:80"

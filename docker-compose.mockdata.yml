@@ -1,0 +1,19 @@
+version: '3.4'
+
+services:
+  # Simple SQL Server for testing
+  sql.data:
+    image: mcr.microsoft.com/mssql/server:2019-latest
+    environment:
+      - SA_PASSWORD=Pass@word
+      - ACCEPT_EULA=Y
+    ports:
+      - "5433:1433"
+    healthcheck:
+      test: ["CMD-SHELL", "sqlcmd -S localhost -U sa -P Pass@word -Q 'SELECT 1'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # You can try to run the .NET Core version directly if you install .NET Core SDK
+  # Or use this as a template for when you have the tools installed

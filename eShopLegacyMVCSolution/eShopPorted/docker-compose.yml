@@ -1,0 +1,14 @@
+version: '3.4'
+
+services:
+  eshop-ported:
+    build:
+      context: ..
+      dockerfile: eShopPorted/Dockerfile
+    ports:
+      - "5119:80"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:80
+      - UseMockData=true
+      - UseCustomizationData=true
