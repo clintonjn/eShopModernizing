@@ -1,0 +1,14 @@
+{
+  "cluster": "eshop-cluster",
+  "serviceName": "eshop-ported-service",
+  "taskDefinition": "eshop-ported-task",
+  "desiredCount": 1,
+  "launchType": "FARGATE",
+  "networkConfiguration": {
+    "awsvpcConfiguration": {
+      "subnets": ["subnet-0cfb4885be3f0a97b", "subnet-0ced1ff67939b86f7"],
+      "securityGroups": ["sg-0fb889f8ff732138b"],
+      "assignPublicIp": "ENABLED"
+    }
+  }
+}

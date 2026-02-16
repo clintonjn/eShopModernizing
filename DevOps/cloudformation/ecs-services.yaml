@@ -1,0 +1,248 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'ECS Services for eShop .NET 8 Applications'
+
+Parameters:
+  EnvironmentName:
+    Description: Environment name prefix for resources
+    Type: String
+    Default: eShop
+
+  ImageTag:
+    Description: Docker image tag
+    Type: String
+    Default: latest
+
+  ECRRepository:
+    Description: ECR repository URI (without tag)
+    Type: String
+    Default: "your-account-id.dkr.ecr.us-east-1.amazonaws.com/eshop"
+
+Resources:
+  # MVC Task Definition
+  MVCTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${EnvironmentName}-mvc
+      Cpu: 512
+      Memory: 1024
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn:
+        Fn::ImportValue: !Sub ${EnvironmentName}-ECS-EXECUTION-ROLE
+      TaskRoleArn:
+        Fn::ImportValue: !Sub ${EnvironmentName}-ECS-TASK-ROLE
+      ContainerDefinitions:
+        - Name: mvc-container
+          Image: !Sub ${ECRRepository}/mvc:${ImageTag}
+          Essential: true
+          PortMappings:
+            - ContainerPort: 80
+              Protocol: tcp
+          Environment:
+            - Name: ASPNETCORE_ENVIRONMENT
+              Value: Production
+            - Name: ASPNETCORE_URLS
+              Value: http://+:80
+            - Name: AWS__Region
+              Value: !Ref AWS::Region
+            - Name: AWS__ParameterStore__ConnectionString
+              Value: !Sub /${EnvironmentName}/database/connectionstring
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group:
+                Fn::ImportValue: !Sub ${EnvironmentName}-MVC-LOG-GROUP
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - curl -f http://localhost/health || exit 1
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 60
+
+  # API Task Definition
+  APITaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${EnvironmentName}-api
+      Cpu: 512
+      Memory: 1024
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn:
+        Fn::ImportValue: !Sub ${EnvironmentName}-ECS-EXECUTION-ROLE
+      TaskRoleArn:
+        Fn::ImportValue: !Sub ${EnvironmentName}-ECS-TASK-ROLE
+      ContainerDefinitions:
+        - Name: api-container
+          Image: !Sub ${ECRRepository}/api:${ImageTag}
+          Essential: true
+          PortMappings:
+            - ContainerPort: 80
+              Protocol: tcp
+          Environment:
+            - Name: ASPNETCORE_ENVIRONMENT
+              Value: Production
+            - Name: ASPNETCORE_URLS
+              Value: http://+:80
+            - Name: AWS__Region
+              Value: !Ref AWS::Region
+            - Name: AWS__ParameterStore__ConnectionString
+              Value: !Sub /${EnvironmentName}/database/connectionstring
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group:
+                Fn::ImportValue: !Sub ${EnvironmentName}-API-LOG-GROUP
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - curl -f http://localhost/health || exit 1
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 60
+
+  # MVC Service
+  MVCService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub ${EnvironmentName}-mvc-service
+      Cluster:
+        Fn::ImportValue: !Sub ${EnvironmentName}-ECS-CLUSTER
+      TaskDefinition: !Ref MVCTaskDefinition
+      DesiredCount: 2
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          SecurityGroups:
+            - Fn::ImportValue: !Sub ${EnvironmentName}-APP-SG
+          Subnets:
+            - Fn::ImportValue: !Sub ${EnvironmentName}-PRI1-SN
+            - Fn::ImportValue: !Sub ${EnvironmentName}-PRI2-SN
+          AssignPublicIp: DISABLED
+      LoadBalancers:
+        - ContainerName: mvc-container
+          ContainerPort: 80
+          TargetGroupArn:
+            Fn::ImportValue: !Sub ${EnvironmentName}-MVC-TG
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 50
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      EnableExecuteCommand: true
+
+  # API Service
+  APIService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub ${EnvironmentName}-api-service
+      Cluster:
+        Fn::ImportValue: !Sub ${EnvironmentName}-ECS-CLUSTER
+      TaskDefinition: !Ref APITaskDefinition
+      DesiredCount: 2
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          SecurityGroups:
+            - Fn::ImportValue: !Sub ${EnvironmentName}-APP-SG
+          Subnets:
+            - Fn::ImportValue: !Sub ${EnvironmentName}-PRI1-SN
+            - Fn::ImportValue: !Sub ${EnvironmentName}-PRI2-SN
+          AssignPublicIp: DISABLED
+      LoadBalancers:
+        - ContainerName: api-container
+          ContainerPort: 80
+          TargetGroupArn:
+            Fn::ImportValue: !Sub ${EnvironmentName}-API-TG
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 50
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      EnableExecuteCommand: true
+
+  # Auto Scaling for MVC Service
+  MVCServiceScalingTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: 10
+      MinCapacity: 2
+      ResourceId: !Sub service/${EnvironmentName}-cluster/${EnvironmentName}-mvc-service
+      RoleARN: !Sub arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+    DependsOn: MVCService
+
+  MVCServiceScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub ${EnvironmentName}-mvc-scaling-policy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref MVCServiceScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        TargetValue: 70.0
+        ScaleOutCooldown: 300
+        ScaleInCooldown: 300
+
+  # Auto Scaling for API Service
+  APIServiceScalingTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: 10
+      MinCapacity: 2
+      ResourceId: !Sub service/${EnvironmentName}-cluster/${EnvironmentName}-api-service
+      RoleARN: !Sub arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+    DependsOn: APIService
+
+  APIServiceScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub ${EnvironmentName}-api-scaling-policy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref APIServiceScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        TargetValue: 70.0
+        ScaleOutCooldown: 300
+        ScaleInCooldown: 300
+
+Outputs:
+  MVCService:
+    Description: MVC ECS Service
+    Value: !Ref MVCService
+    Export:
+      Name: !Sub ${EnvironmentName}-MVC-SERVICE
+
+  APIService:
+    Description: API ECS Service
+    Value: !Ref APIService
+    Export:
+      Name: !Sub ${EnvironmentName}-API-SERVICE
+
+  MVCTaskDefinition:
+    Description: MVC Task Definition
+    Value: !Ref MVCTaskDefinition
+    Export:
+      Name: !Sub ${EnvironmentName}-MVC-TASK-DEF
+
+  APITaskDefinition:
+    Description: API Task Definition
+    Value: !Ref APITaskDefinition
+    Export:
+      Name: !Sub ${EnvironmentName}-API-TASK-DEF

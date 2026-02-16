@@ -1,0 +1,214 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'RDS SQL Server Database for eShop .NET 8 Applications'
+
+Parameters:
+  EnvironmentName:
+    Description: Environment name prefix for resources
+    Type: String
+    Default: eShop
+
+  DatabaseName:
+    Description: Database name
+    Type: String
+    Default: eShopCatalogDb
+
+  DatabaseUsername:
+    Description: Database master username
+    Type: String
+    Default: eshopuser
+    MinLength: 1
+    MaxLength: 16
+    AllowedPattern: '[a-zA-Z][a-zA-Z0-9]*'
+
+  DatabasePassword:
+    Description: Database master password
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    MaxLength: 41
+    AllowedPattern: '[a-zA-Z0-9]*'
+    ConstraintDescription: Must contain only alphanumeric characters
+
+  DatabaseInstanceClass:
+    Description: Database instance class
+    Type: String
+    Default: db.t3.micro
+    AllowedValues:
+      - db.t3.micro
+      - db.t3.small
+      - db.t3.medium
+      - db.t3.large
+      - db.m5.large
+      - db.m5.xlarge
+
+  DatabaseAllocatedStorage:
+    Description: Database allocated storage in GB
+    Type: Number
+    Default: 20
+    MinValue: 20
+    MaxValue: 1000
+
+Resources:
+  # Database Subnet Group
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for RDS database
+      SubnetIds:
+        - Fn::ImportValue: !Sub ${EnvironmentName}-PRI1-SN
+        - Fn::ImportValue: !Sub ${EnvironmentName}-PRI2-SN
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-db-subnet-group
+
+  # Database Security Group
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for RDS database
+      VpcId:
+        Fn::ImportValue: !Sub ${EnvironmentName}-VPCID
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 1433
+          ToPort: 1433
+          SourceSecurityGroupId: !Ref ApplicationSecurityGroup
+          Description: Allow access from application security group
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-db-sg
+
+  # Application Security Group (for ECS tasks)
+  ApplicationSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for application containers
+      VpcId:
+        Fn::ImportValue: !Sub ${EnvironmentName}-VPCID
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: Allow HTTP traffic
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: Allow HTTPS traffic
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-app-sg
+
+  # RDS Database Instance
+  DatabaseInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub ${EnvironmentName}-sqlserver
+      DBName: !Ref DatabaseName
+      DBInstanceClass: !Ref DatabaseInstanceClass
+      Engine: sqlserver-ex
+      EngineVersion: '15.00.4073.23.v1'
+      MasterUsername: !Ref DatabaseUsername
+      MasterUserPassword: !Ref DatabasePassword
+      AllocatedStorage: !Ref DatabaseAllocatedStorage
+      StorageType: gp2
+      StorageEncrypted: true
+      VPCSecurityGroups:
+        - !Ref DatabaseSecurityGroup
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      BackupRetentionPeriod: 7
+      MultiAZ: false
+      PubliclyAccessible: false
+      DeletionProtection: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-sqlserver
+
+  # Parameter Store entries for connection strings
+  DatabaseEndpointParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/database/endpoint
+      Type: String
+      Value: !GetAtt DatabaseInstance.Endpoint.Address
+      Description: RDS database endpoint
+
+  DatabasePortParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/database/port
+      Type: String
+      Value: !GetAtt DatabaseInstance.Endpoint.Port
+      Description: RDS database port
+
+  DatabaseNameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/database/name
+      Type: String
+      Value: !Ref DatabaseName
+      Description: RDS database name
+
+  DatabaseUsernameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/database/username
+      Type: String
+      Value: !Ref DatabaseUsername
+      Description: RDS database username
+
+  DatabasePasswordParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/database/password
+      Type: SecureString
+      Value: !Ref DatabasePassword
+      Description: RDS database password
+
+  # Connection string parameter
+  ConnectionStringParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/database/connectionstring
+      Type: SecureString
+      Value: !Sub 
+        - 'Server=${Endpoint},${Port};Database=${DatabaseName};User Id=${Username};Password=${Password};Encrypt=True;TrustServerCertificate=True;'
+        - Endpoint: !GetAtt DatabaseInstance.Endpoint.Address
+          Port: !GetAtt DatabaseInstance.Endpoint.Port
+          DatabaseName: !Ref DatabaseName
+          Username: !Ref DatabaseUsername
+          Password: !Ref DatabasePassword
+      Description: Complete database connection string
+
+Outputs:
+  DatabaseEndpoint:
+    Description: RDS database endpoint
+    Value: !GetAtt DatabaseInstance.Endpoint.Address
+    Export:
+      Name: !Sub ${EnvironmentName}-DB-ENDPOINT
+
+  DatabasePort:
+    Description: RDS database port
+    Value: !GetAtt DatabaseInstance.Endpoint.Port
+    Export:
+      Name: !Sub ${EnvironmentName}-DB-PORT
+
+  DatabaseSecurityGroup:
+    Description: Database security group
+    Value: !Ref DatabaseSecurityGroup
+    Export:
+      Name: !Sub ${EnvironmentName}-DB-SG
+
+  ApplicationSecurityGroup:
+    Description: Application security group
+    Value: !Ref ApplicationSecurityGroup
+    Export:
+      Name: !Sub ${EnvironmentName}-APP-SG
+
+  ConnectionStringParameterName:
+    Description: Parameter Store name for connection string
+    Value: !Ref ConnectionStringParameter
+    Export:
+      Name: !Sub ${EnvironmentName}-DB-CONNECTION-PARAM
